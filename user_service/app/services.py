@@ -2,26 +2,45 @@ from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
+from pyxtension.streams import stream
 from user_service.app.db import engine
 from user_service.app.models import User
 from pydantic import BaseModel
+from typing import Dict
 
 
 class UserSearchDTO(BaseModel):
-  id: Optional[int]
+  id: Optional[int] = None
   username: Optional[str] = None
   email: Optional[str] = None
-  is_active: Optional[bool] = True #need to convert str to bool
-  is_cat: Optional[bool] = None
+  is_active: Optional[str] = "true" #need to convert str to bool
+  is_cat: Optional[str] = None
+
 
 class UserDTO(BaseModel):
   username: str
   email: str
   password: str
+  is_active: Optional[bool] = True
   is_cat: bool
 
   def to_dao(self):
     return User(name=self.username, email=self.email, password_hash=self.password, is_a_cat=self.is_cat)
+
+
+class UserResponse:
+  id: int
+  username: str
+  email: str
+  is_active: bool
+  is_a_cat: bool
+
+  def __init__(self, dao: User):
+    self.id = dao.id
+    self.username = dao.name
+    self.email = dao.email
+    self.is_active = dao.is_active
+    self.is_a_cat = dao.is_a_cat
 
 
 class UserService:
@@ -35,25 +54,25 @@ class UserService:
 
   def get_users(self):
     users = self.session.query(User).all()
-    return users
+    return stream(users).map(lambda u: UserResponse(u)).to_list()
 
   def search_user(self, search_params: UserSearchDTO):
     if search_params.id is not None:
       return self.get_user_by_id(search_params.id)
 
-    if search_params.username is None:
-      search_params.username = "*"
-    if search_params.email is None:
-      search_params.email = "*"
-    if search_params.is_active is None:
-      search_params.is_active = True
+    query = ["select * from users where 1==1 "]
+    if search_params.username is not None:
+      query.append(" name == :username ")
+    if search_params.email is not None:
+      query.append(" email == :email ")
+    if search_params.is_active is not None:
+      query.append(" is_active == :is_active ")
 
-    query = text("select * from users where username = :username and "
-             "email = :email and is_active = :is_active")
-    params = {"username":search_params.username, "email":search_params.email, "is_active":search_params.is_active}
+    query_full = "and".join(query)
+    params = {"username":search_params.username, "email":search_params.email, "is_active":bool(search_params.is_active)}
 
-    users = self.session.execute(query, params).fetchall()
-    return users
+    users = self.session.execute(text(query_full), params).fetchall()
+    return stream(users).map(lambda u: UserResponse(u)).to_list()
 
 
   def get_user_by_id(self, user_id: int):
